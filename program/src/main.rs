@@ -2,8 +2,9 @@
 sp1_zkvm::entrypoint!(main);
 
 use serde::{Deserialize, Serialize};
-use alloy_primitives::{keccak256, U256};
+use alloy_primitives::U256;
 use alloy_sol_types::{sol, SolType};
+use tiny_keccak::{Hasher, Keccak};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "UPPERCASE")]
@@ -36,7 +37,12 @@ pub fn main() {
     let group_id = sp1_zkvm::io::read::<String>();
 
     let votes: Vec<Vote> = serde_json::from_str(&raw_votes_data).unwrap();
-    let hash = keccak256(&raw_votes_data);
+
+    let mut hash = [0u8; 32];
+    let mut keccak256 = Keccak::v256();
+    keccak256.update(&raw_votes_data.as_bytes());
+    keccak256.finalize(&mut hash);
+
     let hex_string = hex::encode(hash);
     let fmt_group_id = group_id.strip_prefix("0x").unwrap();
 
