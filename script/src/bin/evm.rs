@@ -171,7 +171,7 @@ async fn main() {
         proof: serialized_proof,
         proof_generator_addr: wallet.address(),
         vm_program_code: Some(ZKVOTE_ELF.to_vec()),
-        verification_key: None,
+        verification_key: Some(bincode::serialize(&vk).expect("Failed to serialize verification key")),
         pub_input: Some(proof.public_values.to_vec()),
     };
 
