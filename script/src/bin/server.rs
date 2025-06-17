@@ -9,10 +9,10 @@ use ethers::types::{Address, U256, Bytes};
 use ethers::signers::{LocalWallet, Signer};
 use alloy_sol_types::sol;
 use reqwest::Client;
-use aligned_sdk::core::types::{
-    AlignedVerificationData, Network, PriceEstimate, ProvingSystemId, VerificationData,
+use aligned_sdk::common::types::{
+    AlignedVerificationData, Network, ProvingSystemId, VerificationData, FeeEstimationType,
 };
-use aligned_sdk::sdk::{get_nonce_from_ethereum, submit_and_wait_verification, estimate_fee};
+use aligned_sdk::verification_layer::{get_nonce_from_ethereum, submit_and_wait_verification, estimate_fee};
 use sp1_sdk::{ProverClient, SP1ProofWithPublicValues, SP1Stdin};
 
 /// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
@@ -63,7 +63,6 @@ struct VoteProcessor {
     wallet: LocalWallet,
     provider: Arc<Provider<Http>>,
     signer: SignerMiddleware<Provider<Http>, LocalWallet>,
-    batcher_url: String,
     network: Network,
 }
 
@@ -71,8 +70,6 @@ impl VoteProcessor {
     async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let rpc_url = env::var("RPC_URL").expect("RPC_URL must be set");
         let operator_api_url = env::var("OPERATOR_API_URL").expect("OPERATOR_API_URL must be set");
-        let batcher_url = env::var("BATCHER_URL")
-            .unwrap_or_else(|_| "wss://batcher.alignedlayer.com".to_string());
 
         let poll_interval_secs: u64 = env::var("POLL_INTERVAL_SECONDS")
             .unwrap_or_else(|_| "30".to_string())
@@ -88,10 +85,18 @@ impl VoteProcessor {
             .expect("VOTEINBOX_CONTRACT_ADDRESS must be set")
             .parse::<Address>()?;
         
-        let network = env::var("NETWORK")
+        let network = match env::var("NETWORK")
             .unwrap_or_else(|_| "holesky".to_string())
-            .parse::<Network>()
-            .unwrap_or(Network::Holesky);
+            .to_lowercase()
+            .as_str()
+        {
+            "devnet" => Network::Devnet,
+            "holesky" => Network::Holesky,
+            "holesky_stage" => Network::HoleskyStage,
+            "mainnet" => Network::Mainnet,
+            "mainnet_stage" => Network::MainnetStage,
+            _ => Network::Holesky,
+        };
 
         let provider = Arc::new(Provider::<Http>::try_from(rpc_url.as_str())?);
         let voterepo_contract = VoteRepo::new(voterepo_contract_address, provider.clone());
@@ -111,7 +116,6 @@ impl VoteProcessor {
             wallet,
             provider,
             signer,
-            batcher_url,
             network,
         })
     }
@@ -188,11 +192,11 @@ impl VoteProcessor {
 
         let vote_data = self.fetch_vote_data(hash).await?;
         let votes: Votes = serde_json::from_str(&vote_data)?;
-        let group_id = hex::encode(hash);
+        let group_id = format!("0x{}", hex::encode(hash));
 
         // Generate SP1 proof
         let mut stdin = SP1Stdin::new();
-        stdin.write(&serde_json::to_string(&votes)?);
+        stdin.write(&serde_json::to_string(&votes.data)?);
         stdin.write(&group_id);
 
         let client = ProverClient::new();
@@ -217,12 +221,12 @@ impl VoteProcessor {
             proof: serialized_proof,
             proof_generator_addr: self.wallet.address(),
             vm_program_code: Some(ZKVOTE_ELF.to_vec()),
-            verification_key: Some(bincode::serialize(&vk)?),
+            verification_key: None, //Some(bincode::serialize(&vk)?),
             pub_input: Some(proof.public_values.to_vec()),
         };
 
         // Estimate fee
-        let max_fee = estimate_fee(&self.provider.url().to_string(), PriceEstimate::Instant)
+        let max_fee = estimate_fee(&self.provider.url().to_string(), FeeEstimationType::Instant)
             .await
             .map_err(|e| format!("Failed to estimate fee: {:?}", e))?;
         println!("Estimated fee: {} ETH", ethers::utils::format_units(max_fee, 18)?);
@@ -231,7 +235,7 @@ impl VoteProcessor {
         let nonce = get_nonce_from_ethereum(
             &self.provider.url().to_string(), 
             self.wallet.address(), 
-            self.network
+            self.network.clone()
         )
         .await
         .map_err(|e| format!("Failed to get nonce: {:?}", e))?;
@@ -240,9 +244,8 @@ impl VoteProcessor {
 
         // Submit to Aligned for verification
         let aligned_verification_data = submit_and_wait_verification(
-            &self.batcher_url,
             &self.provider.url().to_string(),
-            self.network,
+            self.network.clone(),
             &verification_data,
             max_fee,
             self.wallet.clone(),

@@ -1,8 +1,8 @@
-use aligned_sdk::core::types::{
-    AlignedVerificationData, Network, PriceEstimate, ProvingSystemId, VerificationData,
+use aligned_sdk::common::types::{
+    AlignedVerificationData, Network, FeeEstimationType, ProvingSystemId, VerificationData,
 };
-use aligned_sdk::sdk::{deposit_to_aligned, estimate_fee};
-use aligned_sdk::sdk::{get_nonce_from_ethereum, submit_and_wait_verification};
+use aligned_sdk::verification_layer::{deposit_to_aligned, estimate_fee};
+use aligned_sdk::verification_layer::{get_nonce_from_ethereum, submit_and_wait_verification};
 use clap::Parser;
 use dialoguer::Confirm;
 use ethers::prelude::*;
@@ -35,7 +35,7 @@ struct Args {
     #[arg(short, long, default_value = "wss://batcher.alignedlayer.com")]
     batcher_url: String,
     #[arg(short, long, default_value = "holesky")]
-    network: Network,
+    network: String,
     #[arg(short, long)]
     voteinbox_contract_address: H160,
 }
@@ -86,12 +86,21 @@ async fn main() {
 
     let signer = SignerMiddleware::new(provider.clone(), wallet.clone());
 
+    let network = match args.network.to_lowercase().as_str() {
+        "devnet" => Network::Devnet,
+        "holesky" => Network::Holesky,
+        "holesky_stage" => Network::HoleskyStage,
+        "mainnet" => Network::Mainnet,
+        "mainnet_stage" => Network::MainnetStage,
+        _ => Network::Holesky,
+    };
+
     if Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
         .with_prompt("Do you want to deposit 0.004eth in Aligned ?\nIf you already deposited Ethereum to Aligned before, this is not needed")
         .interact()
         .expect("Failed to read user input") {   
 
-        deposit_to_aligned(U256::from(4000000000000000u128), signer.clone(), args.network).await
+        deposit_to_aligned(U256::from(4000000000000000u128), signer.clone(), network.clone()).await
         .expect("Failed to pay for proof submission");
     }
 
@@ -175,7 +184,7 @@ async fn main() {
         pub_input: Some(proof.public_values.to_vec()),
     };
 
-    let max_fee = estimate_fee(&rpc_url, PriceEstimate::Instant)
+    let max_fee = estimate_fee(&rpc_url, FeeEstimationType::Instant)
         .await
         .expect("failed to fetch gas price from the blockchain");
 
@@ -187,16 +196,15 @@ async fn main() {
         .expect("Failed to read user input")
     {   return; }
 
-    let nonce = get_nonce_from_ethereum(&rpc_url, wallet.address(), args.network)
+    let nonce = get_nonce_from_ethereum(&rpc_url, wallet.address(), network.clone())
         .await
         .expect("Failed to get next nonce");
 
     println!("Submitting your proof...");
 
     let aligned_verification_data = submit_and_wait_verification(
-        &args.batcher_url,
         &rpc_url,
-        args.network,
+        network,
         &verification_data,
         max_fee,
         wallet.clone(),
