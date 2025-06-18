@@ -141,6 +141,8 @@ async fn main() {
 
         client.verify(&proof, &vk).expect("failed to verify proof");
         println!("Successfully verified proof!");
+
+        proof.save("proof-with-pis.bin").expect("saving proof failed");
     }
 
     let duration = start.elapsed();
