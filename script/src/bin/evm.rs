@@ -43,23 +43,7 @@ struct Args {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Votes {
-    pub data: Vec<Vote>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "UPPERCASE")]
-pub struct Vote {
-    pub id_tps: String,
-    pub city_name: String,
-    pub district_name: String,
-    pub vote_result: [Candidate; 2],
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "UPPERCASE")]
-pub struct Candidate {
-    pub name: String,
-    pub vote: u64,
+    pub data: [u64; 2],
 }
 
 #[tokio::main]
@@ -135,12 +119,12 @@ async fn main() {
         .await
         .unwrap();
 
-    let mut votes: Vec<Vote> = vec![];
+    let mut votes: Votes = Votes { data: [0, 0] };
 
     match response.status() {
         reqwest::StatusCode::OK => {
             match response.json::<Votes>().await {
-                Ok(result) => votes = result.data,
+                Ok(result) => votes = result,
                 Err(error) => println!(
                     "Hm, the response didn't match the shape we expected. {}",
                     error
@@ -156,7 +140,7 @@ async fn main() {
     let start = Instant::now();
 
     let mut stdin = SP1Stdin::new();
-    stdin.write(&serde_json::to_string(&votes).unwrap());
+    stdin.write(&serde_json::to_string(&votes.data).unwrap());
     stdin.write(&group_id.trim());
 
     let client = ProverClient::new();
@@ -180,7 +164,7 @@ async fn main() {
         proof: serialized_proof,
         proof_generator_addr: wallet.address(),
         vm_program_code: Some(ZKVOTE_ELF.to_vec()),
-        verification_key: Some(bincode::serialize(&vk).expect("Failed to serialize verification key")),
+        verification_key: None,//Some(bincode::serialize(&vk).expect("Failed to serialize verification key")),
         pub_input: Some(proof.public_values.to_vec()),
     };
 
