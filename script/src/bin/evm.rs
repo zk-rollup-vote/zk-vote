@@ -43,7 +43,23 @@ struct Args {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Votes {
-    pub data: [u64; 2],
+    pub data: Vec<Vote>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "UPPERCASE")]
+pub struct Vote {
+    pub id_tps: String,
+    pub city_name: String,
+    pub district_name: String,
+    pub vote_result: [Candidate; 2],
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "UPPERCASE")]
+pub struct Candidate {
+    pub name: String,
+    pub vote: u64,
 }
 
 #[tokio::main]
@@ -119,12 +135,12 @@ async fn main() {
         .await
         .unwrap();
 
-    let mut votes: Votes = Votes { data: [0, 0] };
+    let mut votes: Vec<Vote> = vec![];
 
     match response.status() {
         reqwest::StatusCode::OK => {
             match response.json::<Votes>().await {
-                Ok(result) => votes = result,
+                Ok(result) => votes = result.data,
                 Err(error) => println!(
                     "Hm, the response didn't match the shape we expected. {}",
                     error
@@ -140,14 +156,15 @@ async fn main() {
     let start = Instant::now();
 
     let mut stdin = SP1Stdin::new();
-    stdin.write(&serde_json::to_string(&votes.data).unwrap());
+    stdin.write(&serde_json::to_string(&votes).unwrap());
     stdin.write(&group_id.trim());
 
-    let client = ProverClient::new();
+    let client = ProverClient::from_env();
     let (pk, vk) = client.setup(ZKVOTE_ELF);
 
     let proof: SP1ProofWithPublicValues = client
-        .prove(&pk, stdin)
+        .prove(&pk, &stdin)
+        .compressed()
         .run()
         .expect("failed to generate proof");
 
@@ -202,9 +219,9 @@ async fn main() {
         hex::encode(aligned_verification_data.batch_merkle_root)
     );
 
-    println!("Claiming Stablecoins...");
+    println!("Submit vote...");
 
-    claim_stablecoin_with_verified_proof(
+    submit_vote_with_verified_proof(
         &aligned_verification_data,
         signer,
         &args.voteinbox_contract_address,
@@ -217,7 +234,7 @@ async fn main() {
     println!("Execution time: {:?}", duration);
 }
 
-async fn claim_stablecoin_with_verified_proof(
+async fn submit_vote_with_verified_proof(
     aligned_verification_data: &AlignedVerificationData,
     signer: SignerMiddleware<Provider<Http>, LocalWallet>,
     voteinbox_contract_addr: &Address,

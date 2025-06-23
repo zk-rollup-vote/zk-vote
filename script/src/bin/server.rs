@@ -199,11 +199,11 @@ impl VoteProcessor {
         stdin.write(&serde_json::to_string(&votes.data)?);
         stdin.write(&group_id);
 
-        let client = ProverClient::new();
+        let client = ProverClient::from_env();
         let (pk, vk) = client.setup(ZKVOTE_ELF);
 
         let proof: SP1ProofWithPublicValues = client
-            .prove(&pk, stdin)
+            .prove(&pk, &stdin)
             .run()
             .expect("Failed to generate proof");
 

@@ -1,11 +1,10 @@
 #[warn(unused_imports)]
-use alloy_sol_types::sol;
-use alloy_primitives::U256;
+use alloy_sol_types::{sol, SolType};
 use clap::Parser;
 use reqwest;
 use sp1_sdk::{ProverClient, SP1Stdin};
-use serde::{Deserialize, Serialize};
 use std::io;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 /// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
@@ -24,7 +23,23 @@ struct Args {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Votes {
-    pub data: [u64; 2],
+    pub data: Vec<Vote>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "UPPERCASE")]
+pub struct Vote {
+    pub id_tps: String,
+    pub city_name: String,
+    pub district_name: String,
+    pub vote_result: [Candidate; 2],
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "UPPERCASE")]
+pub struct Candidate {
+    pub name: String,
+    pub vote: u64,
 }
 
 sol! {
@@ -78,12 +93,12 @@ async fn main() {
         .await
         .unwrap();
 
-    let mut votes: Votes = Votes { data: [0, 0] };
+    let mut votes: Vec<Vote> = vec![];
 
     match response.status() {
         reqwest::StatusCode::OK => {
             match response.json::<Votes>().await {
-                Ok(result) => votes = result,
+                Ok(result) => votes = result.data,
                 Err(error) => println!(
                     "Hm, the response didn't match the shape we expected. {}",
                     error
@@ -99,25 +114,17 @@ async fn main() {
     let start = Instant::now();
 
     let mut stdin = SP1Stdin::new();
-    stdin.write(&serde_json::to_string(&votes.data).unwrap());
+    stdin.write(&serde_json::to_string(&votes).unwrap());
     stdin.write(&group_id.trim());
 
-    let client = ProverClient::new();
+    let client = ProverClient::from_env();
 
     if args.execute {
-        let (_output, report) = client.execute(ZKVOTE_ELF, stdin).run().unwrap();
+        let (output, report) = client.execute(ZKVOTE_ELF, &stdin).run().unwrap();
         println!("Program executed successfully.");
 
         // Read the output.
-        //let decoded = PublicValuesStruct::abi_decode(output.as_slice(), true).unwrap();
-        let group_id: U256 = U256::from_be_bytes(TryInto::<[u8; 32]>::try_into(hex::decode(group_id.trim().strip_prefix("0x").unwrap()).unwrap()).unwrap());
-
-        let decoded: PublicValuesStruct = PublicValuesStruct {
-            groupId: group_id,
-            candidateA: U256::from(votes.data[0]),
-            candidateB: U256::from(votes.data[1]),
-            candidateC: U256::from(0),
-        };
+        let decoded = PublicValuesStruct::abi_decode(output.as_slice(), true).unwrap();
         println!("public struct: {:?}", decoded);
 
         // Record the number of cycles executed.
@@ -126,7 +133,8 @@ async fn main() {
         let (pk, vk) = client.setup(ZKVOTE_ELF);
 
         let proof = client
-            .prove(&pk, stdin)
+            .prove(&pk, &stdin)
+            .compressed()
             .run()
             .expect("failed to generate proof");
 

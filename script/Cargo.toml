@@ -17,10 +17,10 @@ name = "server"
 path = "src/bin/server.rs"
 
 [dependencies]
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1.git", rev = "v3.0.0" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1.git", rev = "v5.0.0" }
 aligned-sdk = { git = "https://github.com/yetanotherco/aligned_layer", tag="v0.16.1" }
 ethers = { version = "2.0", features = ["ws", "rustls"] }
-tokio = { version = "1.42.0", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.45.1", features = ["rt", "rt-multi-thread", "macros"] }
 bincode = "1.3.3"
 clap = { version = "4.5.23", features = ["derive"] }
 anyhow = "1.0.94"
