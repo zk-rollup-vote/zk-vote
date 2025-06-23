@@ -1,0 +1,191 @@
+name: Deploy Server to VPS
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        components: rustfmt, clippy
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Build server binary
+      run: |
+        cd script
+        cargo build --release --bin server
+        
+    - name: Prepare deployment files
+      run: |
+        mkdir -p deploy
+        cp script/target/release/server deploy/
+        cp script/VoteInboxContract.json deploy/
+        cp script/VoteRepoContract.json deploy/
+        cp program/elf/riscv32im-succinct-zkvm-elf deploy/
+        
+    - name: Create systemd service file
+      run: |
+        cat > deploy/vote-server.service << 'EOF'
+        [Unit]
+        Description=Vote ZK Server
+        After=network.target
+        
+        [Service]
+        Type=simple
+        User=vote-server
+        WorkingDirectory=/opt/vote-zk
+        ExecStart=/opt/vote-zk/server
+        Restart=always
+        RestartSec=10
+        Environment=RUST_LOG=info
+        EnvironmentFile=/opt/vote-zk/.env
+        
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        
+    - name: Create environment file template
+      run: |
+        cat > deploy/.env.template << 'EOF'
+        # Blockchain Configuration
+        RPC_URL=${{ secrets.RPC_URL }}
+        
+        # Contract Configuration
+        VOTEREPO_CONTRACT_ADDRESS=${{ secrets.VOTEREPO_CONTRACT_ADDRESS }}
+        VOTEINBOX_CONTRACT_ADDRESS=${{ secrets.VOTEINBOX_CONTRACT_ADDRESS }}
+        
+        # API Configuration
+        OPERATOR_API_URL=${{ secrets.OPERATOR_API_URL }}
+        
+        # Server Configuration
+        POLL_INTERVAL_SECONDS=${{ secrets.POLL_INTERVAL_SECONDS || '30' }}
+        
+        # Private Key
+        PRIVATE_KEY=${{ secrets.PRIVATE_KEY }}
+        
+        # Network Configuration
+        NETWORK=${{ secrets.NETWORK || 'holesky' }}
+        EOF
+        
+    - name: Create deployment script
+      run: |
+        cat > deploy/deploy.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        # Create user if it doesn't exist
+        if ! id "vote-server" &>/dev/null; then
+            sudo useradd --system --shell /bin/false vote-server
+        fi
+        
+        # Create directory and set permissions
+        sudo mkdir -p /opt/vote-zk
+        sudo chown vote-server:vote-server /opt/vote-zk
+        
+        # Copy files
+        sudo cp server /opt/vote-zk/
+        sudo cp *.json /opt/vote-zk/
+        sudo cp riscv32im-succinct-zkvm-elf /opt/vote-zk/
+        sudo cp .env.template /opt/vote-zk/.env
+        sudo chown -R vote-server:vote-server /opt/vote-zk
+        sudo chmod +x /opt/vote-zk/server
+        
+        # Install systemd service
+        sudo cp vote-server.service /etc/systemd/system/
+        sudo systemctl daemon-reload
+        
+        # Enable and start service
+        sudo systemctl enable vote-server
+        sudo systemctl restart vote-server
+        
+        echo "Deployment completed successfully!"
+        echo "Service status:"
+        sudo systemctl status vote-server --no-pager
+        EOF
+        chmod +x deploy/deploy.sh
+        
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        password: ${{ secrets.VPS_PASSWORD }}
+        port: ${{ secrets.VPS_PORT || 22 }}
+        script_stop: true
+        script: |
+          # Create temporary directory
+          mkdir -p ~/vote-zk-deploy
+          
+    - name: Copy files to VPS
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        password: ${{ secrets.VPS_PASSWORD }}
+        port: ${{ secrets.VPS_PORT || 22 }}
+        source: "deploy/*"
+        target: "~/vote-zk-deploy/"
+        strip_components: 1
+        
+    - name: Execute deployment script
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        password: ${{ secrets.VPS_PASSWORD }}
+        port: ${{ secrets.VPS_PORT || 22 }}
+        script_stop: true
+        script: |
+          cd ~/vote-zk-deploy
+          chmod +x deploy.sh
+          ./deploy.sh
+          
+    - name: Cleanup deployment files
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        password: ${{ secrets.VPS_PASSWORD }}
+        port: ${{ secrets.VPS_PORT || 22 }}
+        script: |
+          rm -rf ~/vote-zk-deploy
+          
+    - name: Show service logs
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        password: ${{ secrets.VPS_PASSWORD }}
+        port: ${{ secrets.VPS_PORT || 22 }}
+        script: |
+          echo "=== Service Status ==="
+          sudo systemctl status vote-server --no-pager
+          echo ""
+          echo "=== Recent Logs ==="
+          sudo journalctl -u vote-server --no-pager -n 20 
