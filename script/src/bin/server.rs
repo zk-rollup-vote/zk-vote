@@ -204,6 +204,7 @@ impl VoteProcessor {
 
         let proof: SP1ProofWithPublicValues = client
             .prove(&pk, &stdin)
+            .compressed()
             .run()
             .expect("Failed to generate proof");
 
