@@ -106,6 +106,12 @@ jobs:
         sudo mkdir -p /opt/vote-zk
         sudo chown vote-server:vote-server /opt/vote-zk
         
+        # Stop service if it's running (to avoid "Text file busy" error)
+        if sudo systemctl is-active --quiet vote-server; then
+            echo "Stopping vote-server service..."
+            sudo systemctl stop vote-server
+        fi
+        
         # Copy files
         sudo cp server /opt/vote-zk/
         sudo cp *.json /opt/vote-zk/
@@ -120,7 +126,7 @@ jobs:
         
         # Enable and start service
         sudo systemctl enable vote-server
-        sudo systemctl restart vote-server
+        sudo systemctl start vote-server
         
         echo "Deployment completed successfully!"
         echo "Service status:"
